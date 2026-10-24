@@ -1,6 +1,6 @@
-gradio
-google-genai
-python-dotenv
-pandas
-pillow
-requests
+gradio==6.30.0
+google-genai==2.33.0
+python-dotenv==1.2.4
+pandas==3.1.0
+pillow==12.3.0
+requests==2.34.2
