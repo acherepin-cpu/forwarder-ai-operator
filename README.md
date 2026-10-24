@@ -44,7 +44,7 @@ All rules live in `app.py`, section **«Экспертные правила»** 
 | Check | Rule | Source of knowledge |
 |---|---|---|
 | Tracking number | Detects carrier (Correos, UPS, DHL, GLS/SEUR, Amazon); verifies the check digit of international postal numbers; flags incomplete numbers | UPU S10 standard, carriers' public formats |
-| IIN (Kazakh national ID) | 12 digits, valid birth date in the first 6, check-digit algorithm | Kazakh IIN specification |
+| IIN (Kazakh national ID) | 12 digits and check digit. Birth date is deliberately **not** enforced: IINs issued after 26.08.2013 need not encode it, and older ones may contain date errors | Kazakh IIN rules |
 | Postcode | Old (6 digits) and new (A05A0K) formats; postcode must match the city | Kazpost formats (demo subset: Almaty, Astana, Shymkent, Karaganda) |
 | Phone | Must be a Kazakh **mobile** number (operator codes), needed for delivery SMS | Kazakh numbering plan |
 | EAEU duty-free limit | Orders above €200 → suggests splitting into several parcels | EAEU e-commerce rules (limit kept at €200 in 2026) |
