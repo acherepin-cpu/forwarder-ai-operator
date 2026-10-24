@@ -63,6 +63,7 @@ ORDER_PROMPT = """Ты — оператор сервиса мейлфорвар�
   "валюта": строка или null
 }
 Правила:
+- каждая позиция заказа — отдельный элемент списка "товары", не пропускай ни одной;
 - "нужен_размер": true только для одежды, обуви и аксессуаров с размером (кольца, ремни, перчатки);
   для косметики, еды, спортивного питания, электроники, книг и т.п. — false;
 - цены пиши числом с точкой, например 119.00, без символа валюты;
@@ -90,6 +91,7 @@ TEXT_PROMPT = """Ты — оператор сервиса мейлфорвард
 }
 Правила:
 - "товары" заполняй, только если клиент описывает, что он купил (например «Zara, куртка, размер M, 59.99 €»);
+- каждый товар — отдельный элемент списка "товары", даже если их несколько в одном предложении;
 - "нужен_размер": true только для одежды, обуви и аксессуаров с размером;
 - переписывай номера, индексы, ИИН и телефоны символ в символ, ничего не исправляй;
 - если поля в сообщении нет, ставь null и ничего не выдумывай.
@@ -483,6 +485,19 @@ def save_order(draft: dict, carrier: str, warnings: list[str]) -> int:
         return cur.lastrowid
 
 
+def format_items(items_json: str) -> str:
+    try:
+        items = json.loads(items_json or "[]")
+    except Exception:
+        return ""
+    rows = []
+    for i in items:
+        size = f" ({i['размер']})" if i.get("размер") else ""
+        price = f" — {float(i['цена']):.2f}" if i.get("цена") is not None else ""
+        rows.append(f"{i.get('название') or '—'}{size}{price}")
+    return "; ".join(rows)
+
+
 def format_id(order_id: int) -> str:
     return f"FWD-{order_id:05d}"
 
@@ -491,15 +506,16 @@ def load_orders() -> pd.DataFrame:
     init_db()
     with sqlite3.connect(DB_PATH) as con:
         df = pd.read_sql_query(
-            "SELECT id, created_at, status, store, order_number, total, currency, track, carrier, "
+            "SELECT id, created_at, status, store, order_number, items, total, currency, track, carrier, "
             "recipient, city, postcode, iin, phone, warnings FROM orders ORDER BY id DESC",
             con,
         )
     # ИИН в интерфейсе маскируем — персональные данные
     df["iin"] = df["iin"].apply(lambda x: "********" + str(x)[-4:] if x else x)
     df["id"] = df["id"].apply(format_id)
+    df["items"] = df["items"].apply(format_items)
     df.columns = [
-        "Наш номер", "Создан", "Статус", "Магазин", "Заказ в магазине", "Сумма", "Валюта", "Трек-номер",
+        "Наш номер", "Создан", "Статус", "Магазин", "Заказ в магазине", "Товары", "Сумма", "Валюта", "Трек-номер",
         "Перевозчик", "Получатель", "Город", "Индекс", "ИИН", "Телефон", "Предупреждения",
     ]
     return df
@@ -532,6 +548,25 @@ def merge_text_fields(fields: dict):
             "валюта": next((i.get("валюта") for i in fields["товары"] if i.get("валюта")), "EUR"),
         }
         return
+    if order is not None and fields.get("товары"):
+        # Клиент дописал товары к уже распознанному заказу
+        existing = order.setdefault("товары", [])
+        added = False
+        for new in fields["товары"]:
+            name = (new.get("название") or "").lower().strip()
+            match = next(
+                (i for i in existing if name and (name in (i.get("название") or "").lower()
+                                                   or (i.get("название") or "").lower() in name)),
+                None,
+            )
+            if match:
+                if new.get("размер") and not match.get("размер"):
+                    match["размер"] = new["размер"]
+            elif name:
+                existing.append(new)
+                added = True
+        if added:
+            order["итоговая_сумма"] = None  # пересчитаем по ценам позиций
     if order is not None:
         if fields.get("номер_заказа"):
             order["номер_заказа"] = str(fields["номер_заказа"]).strip()
