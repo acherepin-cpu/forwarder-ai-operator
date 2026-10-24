@@ -31,6 +31,8 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orders.db")
 DUTY_FREE_LIMIT_EUR = 200
+STATUS_AWAITING = "ожидаем поступления на склад"
+STATUS_REVIEW = "ожидаем поступления на склад, нужна проверка оператора"
 
 client = genai.Client(api_key=API_KEY)
 
@@ -49,6 +51,7 @@ ORDER_PROMPT = """Ты — оператор сервиса мейлфорвар�
       "артикул": строка или null,
       "цвет": строка или null,
       "размер": строка или null,
+      "нужен_размер": true или false,
       "цена": число или null,
       "валюта": строка или null
     }
@@ -57,6 +60,8 @@ ORDER_PROMPT = """Ты — оператор сервиса мейлфорвар�
   "валюта": строка или null
 }
 Правила:
+- "нужен_размер": true только для одежды, обуви и аксессуаров с размером (кольца, ремни, перчатки);
+  для косметики, еды, спортивного питания, электроники, книг и т.п. — false;
 - цены пиши числом с точкой, например 119.00, без символа валюты;
 - валюту пиши кодом: EUR, USD и т.д.;
 - если каких-то данных нет на изображении, ставь null и ничего не выдумывай."""
@@ -285,7 +290,7 @@ def validate(draft: dict):
         if not items:
             missing.append("список товаров")
         for n, item in enumerate(items, 1):
-            if not item.get("размер"):
+            if item.get("нужен_размер", True) and not item.get("размер"):
                 missing.append(f"размер для «{item.get('название') or f'товар №{n}'}»")
         total = order_total(order)
         if total is None:
@@ -377,7 +382,7 @@ def init_db():
 
 def save_order(draft: dict, carrier: str, warnings: list[str]) -> int:
     order, d = draft["order"], draft["delivery"]
-    status = "на проверке" if warnings else "готов к отправке"
+    status = STATUS_REVIEW if warnings else STATUS_AWAITING
     with sqlite3.connect(DB_PATH) as con:
         cur = con.execute(
             """INSERT INTO orders (created_at, status, store, order_number, items, total, currency,
@@ -437,7 +442,7 @@ def merge_text_fields(fields: dict):
             order["итоговая_сумма"] = fields["итоговая_сумма"]
         if fields.get("размер"):
             for item in order.get("товары") or []:
-                if not item.get("размер"):
+                if item.get("нужен_размер", True) and not item.get("размер"):
                     item["размер"] = str(fields["размер"]).strip()
 
 
@@ -448,10 +453,12 @@ def format_order(order: dict) -> str:
     for n, item in enumerate(order.get("товары") or [], 1):
         price = item.get("цена")
         price_str = f"{float(price):.2f} {item.get('валюта') or ''}".strip() if price is not None else "—"
-        lines.append(
-            f"- Товар {n}: {item.get('название') or '—'} | цвет {item.get('цвет') or '—'} | "
-            f"размер {item.get('размер') or '—'} | {price_str}"
-        )
+        if item.get("нужен_размер", True) or item.get("размер"):
+            size_str = f"размер {item.get('размер') or '—'} | "
+        else:
+            size_str = ""
+        color_str = f"цвет {item['цвет']} | " if item.get("цвет") else ""
+        lines.append(f"- Товар {n}: {item.get('название') or '—'} | {color_str}{size_str}{price_str}")
     total = order_total(order)
     lines.append(f"- Итого: {f'{total:.2f} ' + (order.get('валюта') or 'EUR') if total is not None else '—'}")
     return "\n".join(lines)
@@ -532,7 +539,7 @@ def chat(message, history):
         )
     elif not errors:
         order_id = save_order(DRAFT, carrier, warnings)
-        status = "на проверке у оператора" if warnings else "готов к отправке"
+        status = STATUS_REVIEW if warnings else STATUS_AWAITING
         parts.append(
             f"✅ **Заказ №{order_id} сохранён.** Перевозчик: {carrier}. Статус: {status}.\n\n"
             "Чтобы оформить следующий заказ, напишите /новый."
